@@ -48,6 +48,7 @@ import MdEditor from 'react-markdown-editor-lite';
 import 'react-markdown-editor-lite/lib/index.css';
 import { useNumberProposals } from '../../hooks/useNumberProposals';
 import Pagination from '../list/Pagination';
+import { useWalletSelector } from '../../contexts/WalletSelectorContext';
 
 const Dao = () => {
   const routerCtx = useRouter();
@@ -85,6 +86,8 @@ const Dao = () => {
   const toggleMultiVoteOpenOff = () => {
     setMultiVoteOpen(false);
   };
+
+  const { modal, selector, accountId, viewMethod, callMethod } = useWalletSelector();
 
   const [isCheckAll, setIsCheckAll] = useState(false);
   const handleSelectAll = (e) => {
@@ -218,27 +221,6 @@ const Dao = () => {
         setSelectDao(true);
       }
     } else {
-      window.contract = new Contract(window.walletConnection.account(), stateCtx.config.contract, {
-        viewMethods: [
-          'get_config',
-          'get_policy',
-          'get_staking_contract',
-          'get_available_amount',
-          'delegation_total_supply',
-          'get_proposals',
-          'get_last_proposal_id',
-          'get_proposal',
-          'get_bounty',
-          'get_bounties',
-          'get_last_bounty_id',
-          'get_bounty_claims',
-          'get_bounty_number_of_claims',
-          'delegation_balance_of',
-          'has_blob'
-        ],
-        changeMethods: ['add_proposal', 'act_proposal']
-      });
-
       if (dao !== undefined) {
         mutationCtx.updateConfig({
           contract: dao
@@ -261,8 +243,7 @@ const Dao = () => {
 
   useEffect(() => {
     if (stateCtx.config.contract !== '') {
-      window.contract
-        .get_policy()
+      viewMethod({ contractId: stateCtx.config.contract, method: 'get_policy' })
         .then((r) => {
           setDaoPolicy(r);
         })
@@ -275,8 +256,7 @@ const Dao = () => {
 
   useEffect(() => {
     if (stateCtx.config.contract !== '') {
-      window.contract
-        .get_config()
+      viewMethod({ contractId: stateCtx.config.contract, method: 'get_config' })
         .then((r) => {
           setDaoConfig(r);
         })
@@ -289,8 +269,7 @@ const Dao = () => {
 
   useEffect(() => {
     if (stateCtx.config.contract !== '') {
-      window.contract
-        .get_staking_contract()
+      viewMethod({ contractId: stateCtx.config.contract, method: 'get_staking_contract' })
         .then((r) => {
           setDaoStaking(r);
         })
@@ -352,7 +331,7 @@ const Dao = () => {
   };
 
   const [firstRun, setFirstRun] = useState(true);
-  const { numberProposals } = useNumberProposals({ setShowLoading });
+  const { numberProposals } = useNumberProposals({ setShowLoading, contractId: stateCtx.config.contract });
   const [pageIndex, setPageIndex] = useState(0);
 
   const totalPages = useMemo(() => {
@@ -388,12 +367,16 @@ const Dao = () => {
       contract: dao
     });
     let data = [];
-    data = window.contract
-      ? await window.contract.get_proposals({
+
+    const proposals = await viewMethod({ contractId: stateCtx.config.contract, method: 'get_proposals', args: {
           from_index: fromIndex,
           limit: limit
-        })
-      : [];
+        }});
+
+    if(proposals) {
+      data = [...proposals];
+    }
+
     const t = [];
     data.map((item, key) => {
       const t2 = {};
@@ -407,7 +390,6 @@ const Dao = () => {
   useEffect(() => {
     if (!isFirstRun) {
       const interval = setInterval(async () => {
-        console.log('loading proposals');
         getProposals().then((r) => {
           setProposals(r);
           setShowLoading(false);
@@ -539,19 +521,19 @@ const Dao = () => {
       const args = new TextEncoder().encode(
         JSON.stringify({ id: Number(element.value), action: action })
       );
-      trns.push(
-        nearApi.transactions.functionCall(
-          'act_proposal',
-          args,
-          new Decimal('10000000000000').toString()
-        )
-      );
+      // trns.push(
+      //   nearApi.transactions.functionCall(
+      //     'act_proposal',
+      //     args,
+      //     new Decimal('10000000000000').toString()
+      //   )
+      // );
     });
 
     if (trns.length > 0) {
-      contract.account.signAndSendTransaction(stateCtx.config.contract, trns).catch((e) => {
-        console.log(e);
-      });
+      // contract.account.signAndSendTransaction(stateCtx.config.contract, trns).catch((e) => {
+      //   console.log(e);
+      // });
     }
   };
 
@@ -925,7 +907,6 @@ const Dao = () => {
     if (!urlRegex.test(string)) {
       return false;
     } else {
-      console.log(string.match(urlRegex));
       return string.match(urlRegex);
     }
   };
@@ -961,15 +942,7 @@ const Dao = () => {
       let ftMetadata = null;
       if (paymentOption === 'FT') {
         try {
-          const tokenContract = new Contract(
-            window.walletConnection.account(),
-            e.target.proposalFT.value,
-            {
-              viewMethods: ['ft_metadata'],
-              changeMethods: []
-            }
-          );
-          ftMetadata = await tokenContract.ft_metadata({});
+          ftMetadata = await viewMethod({ contractId: e.target.proposalFT.value, method: 'ft_metadata' })
         } catch (error) {
           // nu vse
           console.log(error);
@@ -1016,8 +989,10 @@ const Dao = () => {
             const tokenContractAddress = e.target.proposalFT.value;
             const amountTokens = amount.mul('1e' + ftMetadata.decimals).toFixed();
 
-            await window.contract.add_proposal(
-              {
+            await callMethod({
+              contractId: stateCtx.config.contract,
+              method: 'add_proposal',
+              args: {
                 proposal: {
                   description: e.target.proposalDescription.value.trim(),
                   kind: {
@@ -1051,14 +1026,17 @@ const Dao = () => {
                   }
                 }
               },
-              new Decimal('30000000000000').toString(),
-              daoPolicy.proposal_bond.toString()
-            );
+              gas: new Decimal('30000000000000').toString(),
+              deposit: daoPolicy.proposal_bond.toString()
+            })
           } else {
             const amountYokto = amount.mul(yoktoNear).toFixed();
             // Handle case of NEAR streams
-            await window.contract.add_proposal(
-              {
+
+            await callMethod({
+              contractId: stateCtx.config.contract,
+              method: 'add_proposal',
+              args: {
                 proposal: {
                   description: e.target.proposalDescription.value.trim(),
                   kind: {
@@ -1082,9 +1060,9 @@ const Dao = () => {
                   }
                 }
               },
-              new Decimal('30000000000000').toString(),
-              daoPolicy.proposal_bond.toString()
-            );
+              gas: new Decimal('30000000000000').toString(),
+              deposit: daoPolicy.proposal_bond.toString()
+            })
           }
         } catch (e) {
           console.log(e);
@@ -1111,8 +1089,10 @@ const Dao = () => {
       if (nearAccountValid && validateDescription) {
         try {
           setShowSpinner(true);
-          await window.contract.add_proposal(
-            {
+          await callMethod({
+            contractId: stateCtx.config.contract,
+            method: 'add_proposal',
+            args: {
               proposal: {
                 description: e.target.proposalDescription.value.trim(),
                 kind: {
@@ -1121,11 +1101,11 @@ const Dao = () => {
                     role: 'council'
                   }
                 }
-              }
+              },
             },
-            new Decimal('30000000000000').toString(),
-            daoPolicy.proposal_bond.toString()
-          );
+            gas: new Decimal('30000000000000').toString(),
+            deposit: daoPolicy.proposal_bond.toString(),
+          })
         } catch (e) {
           console.log(e);
           setShowError(e);
@@ -1180,8 +1160,10 @@ const Dao = () => {
       if (councilAccountValid && validateDescription) {
         try {
           setShowSpinner(true);
-          await window.contract.add_proposal(
-            {
+          await callMethod({
+            contractId: stateCtx.config.contract,
+            method: 'add_proposal',
+            args: {
               proposal: {
                 description: e.target.proposalDescription.value.trim(),
                 kind: {
@@ -1192,9 +1174,9 @@ const Dao = () => {
                 }
               }
             },
-            new Decimal('30000000000000').toString(),
-            daoPolicy.proposal_bond.toString()
-          );
+            gas: new Decimal('30000000000000').toString(),
+            deposit: daoPolicy.proposal_bond.toString(),
+          })
         } catch (e) {
           console.log(e);
           setShowError(e);
@@ -1250,20 +1232,32 @@ const Dao = () => {
       }
 
       let r = null;
+
       if (paymentOption === 'FT') {
         const token = e.target.proposalFT.value.split('.');
+        const contractId = token[1] + '.' + token[2];
+
         if (token.length === 3) {
-          const tokenContract = new Contract(
-            window.walletConnection.account(),
-            token[1] + '.' + token[2],
-            {
-              viewMethods: ['get_token'],
-              changeMethods: []
-            }
-          );
-          r = await tokenContract.get_token({ token_id: token[0] });
+          r = await viewMethod({ contractId, method: 'get_token', args: { token_id: token[0] } }).then((r) => {
+            setMetadata(r.metadata.decimals);
+          });
         }
       }
+
+      // if (paymentOption === 'FT') {
+      //   const token = e.target.proposalFT.value.split('.');
+      //   if (token.length === 3) {
+      //     const tokenContract = new Contract(
+      //       window.walletConnection.account(),
+      //       token[1] + '.' + token[2],
+      //       {
+      //         viewMethods: ['get_token'],
+      //         changeMethods: []
+      //       }
+      //     );
+      //     r = await tokenContract.get_token({ token_id: token[0] });
+      //   }
+      // }
 
       if (
         (validateTarget &&
@@ -1279,8 +1273,11 @@ const Dao = () => {
 
         try {
           setShowSpinner(true);
-          await window.contract.add_proposal(
-            {
+
+          await callMethod({
+            contractId: stateCtx.config.contract,
+            method: 'add_proposal',
+            args: {
               proposal: {
                 description: e.target.proposalDescription.value.trim(),
                 kind: {
@@ -1295,9 +1292,9 @@ const Dao = () => {
                 }
               }
             },
-            new Decimal('30000000000000').toString(),
-            daoPolicy.proposal_bond.toString()
-          );
+            gas: new Decimal('30000000000000').toString(),
+            deposit: daoPolicy.proposal_bond.toString(),
+          })
         } catch (e) {
           console.log(e);
           setShowError(e);
@@ -1352,12 +1349,13 @@ const Dao = () => {
         const args = Buffer.from(
           JSON.stringify(argsList).replaceAll('^"', '').replaceAll('"^', '')
         ).toString('base64');
-        //console.log(argsList);
 
         try {
           setShowSpinner(true);
-          await window.contract.add_proposal(
-            {
+          await callMethod({
+            contractId: stateCtx.config.contract,
+            method: 'add_proposal',
+            args: {
               proposal: {
                 description: e.target.proposalDescription.value.trim(),
                 kind: {
@@ -1375,9 +1373,9 @@ const Dao = () => {
                 }
               }
             },
-            new Decimal('200000000000000').toString(),
-            daoPolicy.proposal_bond.toString()
-          );
+            gas: new Decimal('200000000000000').toString(),
+            deposit: daoPolicy.proposal_bond.toString(),
+          })
         } catch (e) {
           console.log(e);
           setShowError(e);
@@ -1481,8 +1479,11 @@ const Dao = () => {
         const depositYokto = deposit.mul(yoktoNear).toFixed();
         try {
           setShowSpinner(true);
-          await window.contract.add_proposal(
-            {
+
+          await callMethod({
+            contractId: stateCtx.config.contract,
+            method: 'add_proposal',
+            args: {
               proposal: {
                 description: e.target.proposalDescription.value.trim(),
                 kind: {
@@ -1500,9 +1501,9 @@ const Dao = () => {
                 }
               }
             },
-            new Decimal('250000000000000').toString(),
-            daoPolicy.proposal_bond.toString()
-          );
+            gas: new Decimal('250000000000000').toString(),
+            deposit: daoPolicy.proposal_bond.toString()
+          })
         } catch (e) {
           console.log(e);
           setShowError(e);
@@ -1588,15 +1589,17 @@ const Dao = () => {
         const args = Buffer.from(
           JSON.stringify(argsList).replaceAll('^"', '').replaceAll('"^', '')
         ).toString('base64');
-        console.log(argsList);
 
         const deposit = new Decimal(e.target.proposalCustomDeposit.value);
         const depositYokto = deposit.mul(yoktoNear).toFixed();
 
         try {
           setShowSpinner(true);
-          await window.contract.add_proposal(
-            {
+
+          await callMethod({
+            contractId: stateCtx.config.contract,
+            method: 'add_proposal',
+            args: {
               proposal: {
                 description: e.target.proposalDescription.value.trim(),
                 kind: {
@@ -1614,9 +1617,9 @@ const Dao = () => {
                 }
               }
             },
-            new Decimal('250000000000000').toString(),
-            daoPolicy.proposal_bond.toString()
-          );
+            gas: new Decimal('250000000000000').toString(),
+            deposit: daoPolicy.proposal_bond.toString()
+          })
         } catch (e) {
           console.log(e);
           setShowError(e);
@@ -1793,7 +1796,7 @@ const Dao = () => {
                           </MDBCard>
                         </MDBCol>
                       </MDBRow>
-                      {window.walletConnection.getAccountId() ? (
+                      {accountId ? (
                         <MDBRow className="mx-auto p-2">
                           <MDBCol className="text-center">
                             <MDBBtn
@@ -2040,7 +2043,7 @@ const Dao = () => {
                             new Decimal(item.submission_time).plus(daoPolicy.proposal_period)
                           ) > new Date() &&
                             item.status === 'InProgress' &&
-                            !item.votes[window.walletConnection.getAccountId()] &&
+                            !item.votes[accountId] &&
                             switchState.switchBatchVote) ? (
                             <Proposal
                               dao={stateCtx.config.contract}

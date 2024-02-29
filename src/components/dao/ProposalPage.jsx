@@ -31,6 +31,7 @@ import Footer from '../shared/Footer';
 import { useParams } from 'react-router-dom';
 import Decimal from 'decimal.js';
 import ReactJson from 'react-json-view';
+import { useWalletSelector } from '../../contexts/WalletSelectorContext';
 
 export const Proposal = (props) => {
   const [showSpinner, setShowSpinner] = useState(false);
@@ -43,37 +44,28 @@ export const Proposal = (props) => {
   });
   const [metadata, setMetadata] = useState(null);
 
+  const { viewMethod, callMethod, accountId } = useWalletSelector();
+
   useEffect(() => {
     if (props.data.kind.Transfer && props.data.kind.Transfer.token_id) {
       const token = props.data.kind.Transfer.token_id.split('.');
       if (token.length === 3) {
-        const tokenContract = new Contract(
-          window.walletConnection.account(),
-          token[1] + '.' + token[2],
-          {
-            viewMethods: ['get_token'],
-            changeMethods: []
-          }
-        );
-        tokenContract.get_token({ token_id: token[0] }).then((r) => {
+        viewMethod({ contractId: token[1] + '.' + token[2], method: 'get_token', args: { token_id: token[0] }}).then((r) => {
           setMetadata(r.metadata.decimals);
         });
       }
     }
   }, []);
 
-  //console.log(props)
-
   const vote = async (vote) => {
     try {
       setShowSpinner(true);
-      await window.contract.act_proposal(
-        {
-          id: props.id,
-          action: vote
-        },
-        new Decimal('300000000000000').toString()
-      );
+      await callMethod({
+        contractId: stateCtx.config.contract,
+        method: 'act_proposal',
+        args: { id: props.id, action: vote },
+        gas: new Decimal('300000000000000').toString()
+      });
     } catch (e) {
       console.log(e);
       props.setShowError(e);
@@ -85,10 +77,13 @@ export const Proposal = (props) => {
   const finalize = async () => {
     try {
       setShowSpinner(true);
-      await window.contract.act_proposal({
-        id: props.id,
-        action: 'Finalize'
-      });
+      await callMethod({
+        contractId: stateCtx.config.contract,
+        method: 'act_proposal',
+        args: {
+          id: props.id,
+          action: 'Finalize'
+        }})
     } catch (e) {
       console.log(e);
       props.setShowError(e);
@@ -98,7 +93,7 @@ export const Proposal = (props) => {
   };
 
   const handleVoteYes = () => {
-    if (props.data.votes[window.walletConnection.getAccountId()] === undefined) {
+    if (props.data.votes[accountId] === undefined) {
       vote('VoteApprove')
         .then()
         .catch((e) => {
@@ -110,7 +105,7 @@ export const Proposal = (props) => {
   };
 
   const handleVoteNo = () => {
-    if (props.data.votes[window.walletConnection.getAccountId()] === undefined) {
+    if (props.data.votes[accountId] === undefined) {
       vote('VoteReject')
         .then()
         .catch((e) => {
@@ -121,7 +116,7 @@ export const Proposal = (props) => {
     }
   };
   const handleVoteRemove = () => {
-    if (props.data.votes[window.walletConnection.getAccountId()] === undefined) {
+    if (props.data.votes[accountId] === undefined) {
       vote('VoteRemove')
         .then()
         .catch((e) => {
@@ -184,7 +179,7 @@ export const Proposal = (props) => {
 
   const handleChange = (e) => {
     const { id, checked } = e.target;
-    console.log('Proposal_votable called', id);
+
     props.setBatchVotes([...props.batchVotes, parseInt(id)]);
     if (!checked) {
       props.setBatchVotes(props.batchVotes.filter((item) => item !== parseInt(id)));
@@ -192,11 +187,11 @@ export const Proposal = (props) => {
   };
 
   const canVote = (permission) =>
-    !!window.walletConnection.getAccountId() &&
+    !!accountId &&
     props.daoPolicy.roles.some(
       (role) =>
         (role.kind === 'Everyone' ||
-          role.kind.Group.includes(window.walletConnection.getAccountId())) &&
+          role.kind.Group.includes(accountId)) &&
         role.permissions.includes(permission)
     );
 
@@ -729,7 +724,7 @@ export const Proposal = (props) => {
                   </MDBTooltip>
                 ) : null}
 
-                {window.walletConnection.getAccountId() &&
+                {accountId &&
                 convertDuration(
                   new Decimal(props.data.submission_time).plus(props.daoPolicy.proposal_period)
                 ) < new Date() &&
@@ -801,7 +796,7 @@ export const Proposal = (props) => {
                 ) : null}
 
                 {props.isBatchVote &&
-                !props.data.votes[window.walletConnection.getAccountId()] &&
+                !props.data.votes[accountId] &&
                 canApprove &&
                 canReject &&
                 canRemove &&
@@ -948,36 +943,15 @@ export const Proposal = (props) => {
 const ProposalPage = () => {
   const [proposals, setProposals] = useState(null);
   const [daoPolicy, setDaoPolicy] = useState([]);
-
-  let { dao, proposal } = useParams();
   const [showError, setShowError] = useState(null);
 
-  useEffect(() => {
-    window.contract = new Contract(window.walletConnection.account(), dao, {
-      viewMethods: [
-        'get_config',
-        'get_policy',
-        'get_staking_contract',
-        'get_available_amount',
-        'delegation_total_supply',
-        'get_proposals',
-        'get_last_proposal_id',
-        'get_proposal',
-        'get_bounty',
-        'get_bounties',
-        'get_last_bounty_id',
-        'get_bounty_claims',
-        'get_bounty_number_of_claims',
-        'delegation_balance_of',
-        'has_blob'
-      ],
-      changeMethods: ['add_proposal', 'act_proposal']
-    });
-  }, [dao]);
+  let { dao, proposal } = useParams();
+  const stateCtx = useGlobalState();
+
+  const { provider, viewMethod } = useWalletSelector();
 
   useEffect(() => {
-    window.contract
-      .get_policy()
+    viewMethod({ contractId: dao, method: 'get_policy' })
       .then((r) => {
         setDaoPolicy(r);
       })
@@ -988,8 +962,9 @@ const ProposalPage = () => {
   }, [dao]);
 
   useEffect(() => {
-    window.contract.get_proposals({ from_index: parseInt(proposal), limit: 1 }).then((list) => {
+    viewMethod({ contractId: dao, method: 'get_proposals', args: { from_index: parseInt(proposal), limit: 1 } }).then((list) => {
       const t = [];
+
       list.map((item, key) => {
         const t2 = {};
         Object.assign(t2, { key: key }, item);
